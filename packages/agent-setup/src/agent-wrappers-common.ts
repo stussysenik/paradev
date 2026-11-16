@@ -118,7 +118,28 @@ export function isManagedArtifactGuardCommand(
 }
 
 function buildRealBinaryResolver(): string {
-	return `find_real_binary() {
+	// Canonicalize a path by following symlinks and resolving the parent
+	// directory physically. `readlink -f` is not available on macOS, so this
+	// stays portable across the platforms the desktop app ships on.
+	return `_superset_resolve_path() {
+  local IFS=$' \\t\\n' target="$1" link dir
+  while [ -L "$target" ]; do
+    link="$(readlink "$target")"
+    case "$link" in
+      /*) target="$link" ;;
+      *) target="$(cd "$(dirname "$target")" && pwd -P)/$link" ;;
+    esac
+  done
+  dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || {
+    printf '%s\\n' "$target"
+    return
+  }
+  printf '%s/%s\\n' "$dir" "$(basename "$target")"
+}
+
+_SUPERSET_WRAPPER_SELF="$(_superset_resolve_path "\${BASH_SOURCE[0]}")"
+
+find_real_binary() {
   local name="$1"
   local IFS=:
   for dir in $PATH; do
@@ -127,6 +148,10 @@ function buildRealBinaryResolver(): string {
     case "$dir" in
       "${getBinDir()}"|"$HOME"/.paradev/bin|"$HOME"/.paradev-*/bin|"$HOME"/.superset/bin|"$HOME"/.superset-*/bin) continue ;;
     esac
+    # A symlink to this wrapper can live in any PATH dir ahead of the real
+    # binary. Skipping by location is not enough: re-execing the wrapper
+    # appends the hook flags again and recurses forever (#4987).
+    [ "$(_superset_resolve_path "$dir/$name")" = "$_SUPERSET_WRAPPER_SELF" ] && continue
     if [ -x "$dir/$name" ] && [ ! -d "$dir/$name" ]; then
       printf "%s\\n" "$dir/$name"
       return 0

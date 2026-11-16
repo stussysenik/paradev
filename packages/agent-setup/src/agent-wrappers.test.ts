@@ -15,6 +15,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -798,6 +799,49 @@ describe("agent-wrappers copilot", () => {
 		);
 		expect(execLine).not.toContain("{{NOTIFY_PATH}}");
 		expect(wrapper).toContain(execLine);
+	});
+
+	it("does not resolve a symlink to the wrapper as the real binary (#4987)", () => {
+		// The resolver is the shared root cause: a symlink to the wrapper in an
+		// unmanaged PATH dir used to be accepted as the real binary, so the
+		// wrapper re-executed itself forever. Probe the resolver directly —
+		// stop the generated wrapper right after REAL_BIN is chosen — so the
+		// red case never spawns a recursion chain.
+		const realBinDir = path.join(TEST_ROOT, "real-bin-no-recursion");
+		const linkDir = path.join(TEST_ROOT, "link-bin-no-recursion");
+		const wrapperPath = path.join(TEST_BIN_DIR, "codex");
+		const probePath = path.join(TEST_ROOT, "probe-codex");
+		const realCodex = path.join(realBinDir, "codex");
+
+		mkdirSync(realBinDir, { recursive: true });
+		mkdirSync(linkDir, { recursive: true });
+		writeFileSync(realCodex, "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+		createCodexWrapper();
+
+		const assignment = 'REAL_BIN="$(find_real_binary "codex")"';
+		const wrapper = readFileSync(wrapperPath, "utf-8");
+		expect(wrapper).toContain(assignment);
+		writeFileSync(
+			probePath,
+			wrapper.replace(
+				assignment,
+				`${assignment}\nprintf '%s\\n' "$REAL_BIN"\nexit 0`,
+			),
+			{ mode: 0o755 },
+		);
+		symlinkSync(probePath, path.join(linkDir, "codex"));
+
+		const result = spawnSync(probePath, [], {
+			env: {
+				...process.env,
+				PATH: `${linkDir}:${realBinDir}:${process.env.PATH || ""}`,
+			},
+			encoding: "utf-8",
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.status).toBe(0);
+		expect(result.stdout.trim()).toBe(realCodex);
 	});
 
 	it("trusts the Paradev workspace codex project config without replacing CODEX_HOME", () => {
