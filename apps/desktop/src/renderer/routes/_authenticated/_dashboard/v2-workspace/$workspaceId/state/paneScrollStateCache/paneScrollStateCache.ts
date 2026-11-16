@@ -74,7 +74,7 @@ export function createPaneScrollStateKey({
 }: {
 	workspaceId: string;
 	paneId?: string;
-	viewId: "diff" | "editor";
+	viewId: "diff" | "editor" | "markdown";
 	resourceId: string;
 }): string {
 	return JSON.stringify([workspaceId, paneId ?? null, viewId, resourceId]);

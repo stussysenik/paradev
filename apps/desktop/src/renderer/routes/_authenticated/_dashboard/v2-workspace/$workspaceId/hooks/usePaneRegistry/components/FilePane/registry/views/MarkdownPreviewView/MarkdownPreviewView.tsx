@@ -1,12 +1,14 @@
 import { Trans } from "@lingui/react/macro";
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { TipTapMarkdownRenderer } from "renderer/components/MarkdownRenderer/components/TipTapMarkdownRenderer";
 import { LinkHoverHint } from "renderer/lib/clickPolicy";
+import { createPaneScrollStateKey } from "renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/state/paneScrollStateCache";
 import { MarkdownSearch } from "renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/TabView/FileViewerPane/components/MarkdownSearch";
 import { useMarkdownSearch } from "renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/TabView/FileViewerPane/hooks/useMarkdownSearch";
 import { useLinkClickHint } from "../../../../../hooks/useLinkClickHint";
 import type { ViewProps } from "../../types";
 import { splitFrontMatter } from "./splitFrontMatter";
+import { useMarkdownPreviewScroll } from "./useMarkdownPreviewScroll";
 
 // Beyond this size the per-keystroke merge in preserveSourceFormatting gets
 // expensive; fall back to a read-only preview and leave editing to CodeView.
@@ -15,11 +17,29 @@ const MAX_EDITABLE_LENGTH = 1_500_000;
 export function MarkdownPreviewView({
 	document,
 	filePath,
+	workspaceId,
+	paneId,
 	isActive,
 	showFrontMatterNote = true,
+	embedded = false,
 	onOpenUrl,
 }: ViewProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
+	const scrollStateKey = useMemo(
+		() =>
+			createPaneScrollStateKey({
+				workspaceId,
+				paneId,
+				viewId: "markdown",
+				resourceId: filePath,
+			}),
+		[workspaceId, paneId, filePath],
+	);
+	const { onScroll } = useMarkdownPreviewScroll({
+		containerRef,
+		scrollStateKey,
+		enabled: !embedded,
+	});
 	const { hint, showHint } = useLinkClickHint();
 	const search = useMarkdownSearch({
 		containerRef,
@@ -51,7 +71,11 @@ export function MarkdownPreviewView({
 				onFindPrevious={search.findPrevious}
 				onClose={search.closeSearch}
 			/>
-			<div ref={containerRef} className="h-full overflow-auto p-4">
+			<div
+				ref={containerRef}
+				className="h-full overflow-auto p-4"
+				onScroll={onScroll}
+			>
 				{frontMatter !== "" && showFrontMatterNote && (
 					<div className="mx-auto mb-2 max-w-3xl select-text text-xs text-muted-foreground">
 						<Trans>
