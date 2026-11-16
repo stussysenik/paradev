@@ -28,6 +28,7 @@ import {
 	getWorkspaceSidebarTab,
 	setWorkspaceSidebarTab,
 } from "../../utils/setWorkspaceSidebarTab";
+import { shouldOpenDiffInNewTab } from "../../utils/shouldOpenDiffInNewTab/shouldOpenDiffInNewTab";
 import { useDefaultBrowserUrl } from "../useDefaultBrowserUrl";
 import type { TerminalLauncher } from "../useV2TerminalLauncher";
 
@@ -86,7 +87,12 @@ export function useWorkspacePaneOpeners({
 				focusTick: Date.now(),
 				filter,
 			};
-			if (openInNewTab) {
+			if (
+				shouldOpenDiffInNewTab(
+					openInNewTab,
+					useSettings.getState().changesOpenTarget,
+				)
+			) {
 				state.addTab({
 					panes: [
 						{
