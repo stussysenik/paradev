@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { basename } from "node:path";
 import {
 	clearInterval,
 	clearTimeout,
@@ -109,10 +110,38 @@ interface SessionEntry {
 	workspaceId: string;
 	/** PTY process ID — null when the terminal isn't yet spawned (or has exited). */
 	pid: number | null;
+	/**
+	 * Chat agent binary for ACP-backed chat sessions. The adapter is the
+	 * registered root PID; the real agent is a descendant. A listener owned by
+	 * that agent must never be offered for or used as a port kill — tree-killing
+	 * it ends the chat session. Null for ordinary terminal sessions.
+	 */
+	agentBinary: string | null;
 	/** Last time this session produced PTY output or was registered with a new pid. */
 	lastActivityAt: number;
 	/** Last time this session was included in a scan. */
 	lastScannedAt: number;
+}
+
+/**
+ * `processName` comes from lsof/procfs and may be truncated, so compare the
+ * agent's configured executable basename in both directions. This is a
+ * fallback identity check; the PID must also belong to the chat session tree.
+ */
+function isAgentProcessName(
+	processName: string,
+	agentBinary: string | null,
+): boolean {
+	if (!agentBinary) return false;
+	const expected = basename(agentBinary)
+		.toLowerCase()
+		.replace(/\.(exe|cmd|bat)$/, "");
+	const actual = processName.toLowerCase();
+	if (expected === actual) return true;
+	return (
+		actual.length >= 4 &&
+		(expected.startsWith(actual) || actual.startsWith(expected))
+	);
 }
 
 interface ScanState {
@@ -168,12 +197,15 @@ export class PortManager extends EventEmitter {
 		terminalId: string,
 		workspaceId: string,
 		pid: number | null,
+		options?: { agentBinary?: string | null },
 	): void {
+		const agentBinary = options?.agentBinary ?? null;
 		const existing = this.sessions.get(terminalId);
 		if (
 			existing &&
 			existing.pid === pid &&
-			existing.workspaceId === workspaceId
+			existing.workspaceId === workspaceId &&
+			existing.agentBinary === agentBinary
 		) {
 			// Re-upserts (e.g. the reaper's periodic sync of unattached daemon
 			// sessions) must not reset the idle clock.
@@ -183,6 +215,7 @@ export class PortManager extends EventEmitter {
 			this.sessions.set(terminalId, {
 				workspaceId,
 				pid,
+				agentBinary,
 				lastActivityAt: Date.now(),
 				lastScannedAt: 0,
 			});
@@ -517,8 +550,11 @@ export class PortManager extends EventEmitter {
 	}): void {
 		const now = Date.now();
 
+		const agentBinary = this.sessions.get(terminalId)?.agentBinary ?? null;
 		const validPortInfos = portInfos.filter(
-			(info) => !IGNORED_PORTS.has(info.port),
+			(info) =>
+				!IGNORED_PORTS.has(info.port) &&
+				!isAgentProcessName(info.processName, agentBinary),
 		);
 		const dedupedPortInfos = dedupePortInfosByPort(validPortInfos);
 
@@ -681,6 +717,15 @@ export class PortManager extends EventEmitter {
 			const trees = buildProcessTrees(table, roots);
 			const tree = trees.get(session.pid);
 			if (!tree) return { success: false };
+			if (
+				tree.includes(detectedPort.pid) &&
+				isAgentProcessName(detectedPort.processName, session.agentBinary)
+			) {
+				return {
+					success: false,
+					error: "Cannot kill the chat agent process",
+				};
+			}
 			if (!tree.includes(detectedPort.pid)) {
 				const owners = await this.detachedResolver.resolve({
 					table,

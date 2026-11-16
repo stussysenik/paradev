@@ -208,7 +208,9 @@ export function createChatAgentBridge(
 			chats.set(options.sessionId, chat);
 			sessionByTerminal.set(chat.terminalId, options.sessionId);
 			chatPortTerminalIds.add(chat.terminalId);
-			portManager.upsertSession(chat.terminalId, chat.workspaceId, null);
+			portManager.upsertSession(chat.terminalId, chat.workspaceId, null, {
+				agentBinary: chat.agentId,
+			});
 			attach(chat);
 		},
 
@@ -217,7 +219,9 @@ export function createChatAgentBridge(
 			if (spawnedChat) spawnedChat.pid = pid;
 			const chat = current(sessionId);
 			if (!chat) return;
-			portManager.upsertSession(chat.terminalId, chat.workspaceId, pid);
+			portManager.upsertSession(chat.terminalId, chat.workspaceId, pid, {
+				agentBinary: chat.agentId,
+			});
 		},
 
 		accountCaptured(sessionId, account) {
@@ -340,6 +344,7 @@ export function createChatAgentBridge(
 					previousChat.terminalId,
 					previousChat.workspaceId,
 					previousChat.pid ?? null,
+					{ agentBinary: previousChat.agentId },
 				);
 				attach(previousChat);
 				ctx.terminalAgentStore.updateChat(previousChat.terminalId, {

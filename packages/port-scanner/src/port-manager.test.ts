@@ -452,6 +452,82 @@ describe("PortManager — killPort", () => {
 			"Port does not belong to the requested workspace",
 		);
 	});
+
+	it("refuses an agent-owned listener but kills that agent's child server", async () => {
+		// #9683: an ACP adapter is the registered root; the real agent is a
+		// descendant. Tree-killing a listener owned by the agent ends the chat.
+		const killed: number[] = [];
+		const chatManager = new PortManager({
+			killFn: async ({ pid }) => {
+				killed.push(pid);
+				return { success: true };
+			},
+		});
+
+		chatManager.upsertSession("chat-1", "ws1", 1000);
+		processTable = [
+			{ pid: 1000, ppid: 500 }, // ACP adapter (registered root)
+			{ pid: 1001, ppid: 1000 }, // real agent CLI
+			{ pid: 1002, ppid: 1001 }, // dev server the agent started
+		];
+		// The server is detached from the mocked session tree; the env reader
+		// attributes it to this chat terminal the way a real background server
+		// would be attributed.
+		terminalIdEnv = new Map([[1002, "chat-1"]]);
+		listeningPorts = [
+			{ port: 3000, pid: 1001, address: "127.0.0.1", processName: "claude" },
+			{ port: 3001, pid: 1002, address: "127.0.0.1", processName: "bun" },
+		];
+		await chatManager.forceScan();
+		chatManager.stopPeriodicScan();
+
+		// Stale UI entry from before this terminal became a chat session: the
+		// port is still tracked, so killPort must recheck protection itself.
+		const chatInternals = chatManager as unknown as {
+			sessions: Map<string, { agentBinary: string | null }>;
+		};
+		const chatSession = chatInternals.sessions.get("chat-1");
+		if (chatSession) chatSession.agentBinary = "claude";
+
+		const agentKill = await chatManager.killPort({
+			terminalId: "chat-1",
+			workspaceId: "ws1",
+			port: 3000,
+		});
+		const serverKill = await chatManager.killPort({
+			terminalId: "chat-1",
+			workspaceId: "ws1",
+			port: 3001,
+		});
+
+		expect(agentKill.success).toBe(false);
+		expect(agentKill.error).toBe("Cannot kill the chat agent process");
+		expect(serverKill.success).toBe(true);
+		expect(killed).toEqual([1002]);
+	});
+
+	it("does not offer an agent-owned listener as a closeable port", async () => {
+		const chatManager = new PortManager({
+			killFn: async () => ({ success: true }),
+		});
+		chatManager.upsertSession("chat-1", "ws1", 1000, {
+			agentBinary: "claude",
+		});
+		processTable = [
+			{ pid: 1000, ppid: 500 },
+			{ pid: 1001, ppid: 1000 },
+			{ pid: 1002, ppid: 1001 },
+		];
+		terminalIdEnv = new Map([[1002, "chat-1"]]);
+		listeningPorts = [
+			{ port: 3000, pid: 1001, address: "127.0.0.1", processName: "claude" },
+			{ port: 3001, pid: 1002, address: "127.0.0.1", processName: "bun" },
+		];
+		await chatManager.forceScan();
+		chatManager.stopPeriodicScan();
+
+		expect(chatManager.getAllPorts().map((p) => p.port)).toEqual([3001]);
+	});
 });
 
 describe("PortManager — #3372 hint regex narrowing", () => {
